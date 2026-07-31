@@ -65,11 +65,8 @@ def fetch_data(request_url):
 def send_discord_alert(item_name, price, estimated_value, item_url):
     ratio = (price / estimated_value) * 100
     
-    # 邏輯：根據折數決定 Embed 左側的色條 (十進位色碼)
-    # 低於 50% 使用綠色 (5763719)，否則使用橘色 (16753920)
     embed_color = 5763719 if ratio < 50 else 16753920
     
-    # 將輸出格式轉換為 Discord Embed JSON 結構
     message = {
         "embeds": [
             {
@@ -148,13 +145,9 @@ def main():
         for item in item_list:
             contract = item.get('contract') or {}
             
-            # --- 精確拆分與防呆邏輯 ---
-            # 獲取合約 ID (每次上架合約皆為唯一值)
             contract_id_val = item.get('contract_id') or contract.get('id')
-            # 獲取物品 ID (裝備本身的固有 ID)
             item_id_val = item.get('id') or item.get('item_id')
             
-            # 優先使用合約 ID。如果 API 異常未提供合約 ID，才退回使用物品 ID
             unique_key = str(contract_id_val) if contract_id_val else str(item_id_val)
 
             if not unique_key or unique_key == 'None':
@@ -178,9 +171,15 @@ def main():
                 continue
                 
             if (price / estimated_value) < 0.8:
-                # 使用更新後的 unique_key 進行驗證
                 if unique_key not in notified_contracts:
-                    item_url = f"https://mutamarket.com/module/{item_id_val}" if item_id_val else TARGET_URL
+                    
+                    # --- 邏輯修正：URL Slugification ---
+                    if item_id_val:
+                        # 將名稱轉換為小寫並替換空白鍵
+                        slug = item_name.lower().replace(" ", "-")
+                        item_url = f"https://mutamarket.com/modules/{slug}-{item_id_val}"
+                    else:
+                        item_url = TARGET_URL
                     
                     send_discord_alert(item_name, price, estimated_value, item_url)
                     notified_contracts.add(unique_key)
