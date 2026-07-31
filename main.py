@@ -41,6 +41,8 @@ HEADERS = {
 
 STATE_FILE = "notified.txt"
 
+# --- 核心函數區塊 ---
+
 def load_notified_contracts():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -88,10 +90,8 @@ def fetch_data(request_url):
 
 def send_discord_alert(item_name, price, estimated_value, item_url):
     ratio = (price / estimated_value) * 100
-    
     embed_color = 5763719 if ratio < 50 else 16753920
     
-    # 邏輯修改：將價格除以一百萬，並四捨五入轉為整數
     price_mil = int(round(price / 1000000))
     estimated_value_mil = int(round(estimated_value / 1000000))
     
@@ -109,13 +109,11 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
                     },
                     {
                         "name": "Contract Price",
-                        # 顯示格式修改：加入千分位並加上 mil 字尾
                         "value": f"{price_mil:,} mil",
                         "inline": True
                     },
                     {
                         "name": "Estimated Value",
-                        # 顯示格式修改：加入千分位並加上 mil 字尾
                         "value": f"{estimated_value_mil:,} mil",
                         "inline": True
                     },
@@ -138,15 +136,60 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     except Exception as e:
         print(f"Discord 推送失敗: {e}")
 
+# 邏輯新增：系統執行結算報告
+def send_discord_summary(start_time, end_time, updated_count):
+    # 將時間格式化為 YYYY-MM-DD HH:MM:SS
+    time_format = "%Y-%m-%d %H:%M:%S"
+    start_str = start_time.strftime(time_format)
+    end_str = end_time.strftime(time_format)
+    
+    message = {
+        "embeds": [
+            {
+                "title": "✅ 監控掃描完成 (System Scan Complete)",
+                "color": 8026746, # 灰色，代表系統提示
+                "fields": [
+                    {
+                        "name": "開始時間 (UTC+8)",
+                        "value": f"`{start_str}`",
+                        "inline": True
+                    },
+                    {
+                        "name": "結束時間 (UTC+8)",
+                        "value": f"`{end_str}`",
+                        "inline": True
+                    },
+                    {
+                        "name": "本次新增警報數",
+                        "value": f"**{updated_count}**",
+                        "inline": False
+                    }
+                ],
+                "footer": {
+                    "text": "Mutamarket Monitor - Lifecycle Log"
+                }
+            }
+        ]
+    }
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=message)
+    except Exception as e:
+        print(f"Discord 結算推播失敗: {e}")
+
 def main():
     if not DISCORD_WEBHOOK_URL:
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
 
+    # 邏輯新增：定義 UTC+8 時區並記錄開始時間
+    tz_utc_8 = datetime.timezone(datetime.timedelta(hours=8))
+    run_start_time = datetime.datetime.now(tz_utc_8)
+
     notified_contracts = load_notified_contracts()
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
 
-    new_alerts_sent = False
+    # 邏輯新增：初始化計數器
+    new_alerts_count = 0
 
     for module_type in MODULE_TYPES:
         print(f"\n[系統] 開始檢查裝備種類: {module_type}")
@@ -219,7 +262,9 @@ def main():
                         
                         send_discord_alert(item_name, price, estimated_value, item_url)
                         notified_contracts.add(unique_key)
-                        new_alerts_sent = True
+                        
+                        # 邏輯修改：成功推播後，計數器 +1
+                        new_alerts_count += 1
                         print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
 
             current_page += 1
@@ -228,7 +273,13 @@ def main():
         time.sleep(1)
 
     print("\n[系統] 所有裝備種類檢查完畢。")
-    if new_alerts_sent:
+    
+    # 邏輯新增：記錄結束時間並發送結算報告
+    run_end_time = datetime.datetime.now(tz_utc_8)
+    send_discord_summary(run_start_time, run_end_time, new_alerts_count)
+
+    # 將布林值判斷改為計數器判斷，大於 0 代表有新警報
+    if new_alerts_count > 0:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
     else:
