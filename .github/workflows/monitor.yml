@@ -35,9 +35,14 @@ jobs:
         run: python main.py
         
       - name: 提交並推送更新後的狀態檔案
-        # 如果 notified.txt 有被修改，就自動 git commit 並推回 GitHub
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add notified.txt
-          git diff-index --quiet HEAD || (git commit -m "chore: 更新已通知合約清單 [skip ci]" && git push)
+          
+          # 邏輯判斷：使用 Bash 的 [ -f 檔案路徑 ] 來檢查檔案是否真實存在
+          if [ -f notified.txt ]; then
+            git add notified.txt
+            git diff-index --quiet HEAD || (git commit -m "chore: 更新已通知合約清單 [skip ci]" && git push)
+          else
+            echo "沒有發現新合約，狀態檔案未生成，略過 Git 提交程序。"
+          fi
