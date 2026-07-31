@@ -86,6 +86,7 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
         print(f"Discord 推送失敗: {e}")
 
 def main():
+def main():
     if not DISCORD_WEBHOOK_URL:
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
@@ -117,10 +118,16 @@ def main():
         estimated_value = item.get('estimated_value')
         item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
         
+        # 排除無效數據與估值錯誤
         if not price or not estimated_value or estimated_value <= 0:
             continue
             
-        if (price / estimated_value) < 0.2:
+        # 邏輯新增：過濾絕對價格過低的合約，忽略 80,000,000 ISK 以下的物品
+        if price < 80000000:
+            continue
+            
+        # 邏輯修改：合約價格低於估計價值的 8 折 (0.8) 才發出通知
+        if (price / estimated_value) < 0.8:
             if contract_id not in notified_contracts:
                 item_id = item.get('id') or item.get('item_id')
                 item_url = f"https://mutamarket.com/module/{item_id}" if item_id else TARGET_URL
@@ -135,7 +142,10 @@ def main():
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
     else:
-        print("本次執行沒有發現新的低價合約。")
+        print("本次執行沒有發現符合條件的新合約。")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
