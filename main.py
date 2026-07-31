@@ -4,10 +4,8 @@ import json
 import os
 import sys
 
-# 目標網址
+# --- 設定區塊 ---
 TARGET_URL = "https://mutamarket.com/modules/type/abyssal-warp-scrambler/no-multi-item-contracts/contracts-only"
-
-# 資安邏輯：不再將 Webhook 寫死在程式碼中，而是從 GitHub 的「環境變數 (Secrets)」安全讀取
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 HEADERS = {
@@ -22,7 +20,6 @@ def load_notified_contracts():
     """從實體檔案讀取已通知的 ID"""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            # 讀取每一行並去除空白，轉為集合 (Set)
             return set(line.strip() for line in f if line.strip())
     return set()
 
@@ -86,7 +83,6 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
         print(f"Discord 推送失敗: {e}")
 
 def main():
-def main():
     if not DISCORD_WEBHOOK_URL:
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
@@ -118,15 +114,14 @@ def main():
         estimated_value = item.get('estimated_value')
         item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
         
-        # 排除無效數據與估值錯誤
         if not price or not estimated_value or estimated_value <= 0:
             continue
             
-        # 邏輯新增：過濾絕對價格過低的合約，忽略 80,000,000 ISK 以下的物品
+        # 邏輯：過濾絕對價格過低的合約，忽略 80,000,000 ISK 以下的物品
         if price < 80000000:
             continue
             
-        # 邏輯修改：合約價格低於估計價值的 8 折 (0.8) 才發出通知
+        # 邏輯：合約價格低於估計價值的 8 折 (0.8) 才發出通知
         if (price / estimated_value) < 0.8:
             if contract_id not in notified_contracts:
                 item_id = item.get('id') or item.get('item_id')
@@ -143,9 +138,6 @@ def main():
         print("已更新狀態檔案。")
     else:
         print("本次執行沒有發現符合條件的新合約。")
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
