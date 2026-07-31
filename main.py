@@ -89,54 +89,64 @@ def main():
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
 
     new_alerts_sent = False
-    
-    # 邏輯修改 2：分頁狀態變數初始化
     current_page = 1
-    last_page = 1  # 預設至少執行一頁，後續會由 JSON 動態覆寫
+    last_page = 1
 
-    # 邏輯修改 3：啟動爬行迴圈
     while current_page <= last_page:
-        # 根據頁碼組裝正確的網址
-        if current_page == 1:
-            current_url = TARGET_URL
-        else:
-            current_url = f"{TARGET_URL}/page/{current_page}"
-            
-        print(f"正在抓取資料: 第 {current_page} 頁 / 共 {last_page} 頁 ...")
+        current_url = TARGET_URL if current_page == 1 else f"{TARGET_URL}/page/{current_page}"
         
         data = fetch_data(current_url)
         if not data:
-            print("資料獲取失敗，中斷後續分頁抓取。")
+            print(f"資料獲取失敗，中斷抓取。({current_url})")
             break
 
         modules_node = data.get('modules', {})
         
-        # 解析該頁的合約陣列與最大頁數
+        # 邏輯升級：同時尋找根目錄與 meta 目錄下的分頁屬性
         if isinstance(modules_node, dict) and 'data' in modules_node:
             item_list = modules_node['data']
-            # 動態從伺服器回傳的數據更新總頁數
-            last_page = modules_node.get('last_page', 1)
+            fetched_last_page = modules_node.get('last_page')
+            if not fetched_last_page and 'meta' in modules_node:
+                fetched_last_page = modules_node['meta'].get('last_page')
+            last_page = fetched_last_page or 1
         elif isinstance(modules_node, list):
             item_list = modules_node
-            last_page = 1 # 如果沒有分頁元數據，就只抓一頁
+            last_page = 1
         else:
-            print("無法解析資料結構。")
+            print("無法解析資料結構，中斷抓取。")
             break
+            
+        print(f"正在抓取資料: 第 {current_page} 頁 / 共 {last_page} 頁 ...")
 
-        # 處理當前頁面的所有合約
-        for item in item_list:
-            contract_id = str(item.get('contract_id'))
+        for idx, item in enumerate(item_list):
+            # --- 系統診斷探針 ---
+            # 只在第一頁的第一筆資料觸發，將原始 JSON 結構印在 GitHub 日誌供後續校準
+            if current_page == 1 and idx == 0:
+                print("\n=== 【系統診斷：真實 JSON 結構前 800 字元】 ===")
+                print(json.dumps(item, indent=2, ensure_ascii=False)[:800])
+                print("================================================\n")
+            
+            # 先採用廣泛的鍵值嘗試邏輯，並確保型別轉換不會報錯
+            contract = item.get('contract') or {}
+            contract_id = str(item.get('contract_id') or contract.get('id'))
+
             if not contract_id or contract_id == 'None':
                 continue
                 
-            price = item.get('price')
-            estimated_value = item.get('estimated_value')
+            raw_price = item.get('price') or contract.get('price')
+            raw_estimated_value = item.get('estimated_value') or item.get('est_value')
             item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
             
-            if not price or not estimated_value or estimated_value <= 0:
+            if raw_price is None or raw_estimated_value is None:
                 continue
                 
-            if price < 80000000:
+            try:
+                price = float(raw_price)
+                estimated_value = float(raw_estimated_value)
+            except (ValueError, TypeError):
+                continue
+                
+            if estimated_value <= 0 or price < 80000000:
                 continue
                 
             if (price / estimated_value) < 0.8:
@@ -149,18 +159,18 @@ def main():
                     new_alerts_sent = True
                     print(f"已發送警報: {item_name} ({price / estimated_value:.1%})")
 
-        # 當前頁面處理完畢，準備進入下一頁
         current_page += 1
-        
-        # 節流防護：如果還有下一頁，強制休眠 2 秒，避免被防火牆判定為 DDoS 攻擊
         if current_page <= last_page:
-            time.sleep(2)
+            time.sleep(2) # 延遲保護，防止翻頁過快被封鎖
 
     if new_alerts_sent:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
     else:
         print("本次執行沒有發現符合條件的新合約。")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
