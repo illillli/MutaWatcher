@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup
 import json
 import os
 import sys
-import time  # 新增：用於翻頁時的延遲保護
+import time
+import datetime
 
 # --- 設定區塊 ---
 TARGET_URL = "https://mutamarket.com/modules/type/abyssal-warp-scrambler/no-multi-item-contracts/contracts-only"
@@ -27,9 +28,7 @@ def save_notified_contracts(contracts):
         for c_id in contracts:
             f.write(f"{c_id}\n")
 
-# 邏輯修改 1：函數現在接收 request_url 參數，不再寫死為 TARGET_URL
 def fetch_data(request_url):
-    """負責繞過防護並提取 Inertia JSON 數據"""
     try:
         response = requests.get(request_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
@@ -55,26 +54,58 @@ def fetch_data(request_url):
             raw_json_string = div_nodes[0]['data-page']
 
     if not raw_json_string:
-        print("錯誤：無法在 HTML 中找到 JSON 結構。")
         return None
     
     try:
         page_data = json.loads(raw_json_string.strip())
         return page_data.get('props', {})
     except json.JSONDecodeError:
-        print("JSON 解析失敗。")
         return None
 
 def send_discord_alert(item_name, price, estimated_value, item_url):
     ratio = (price / estimated_value) * 100
+    
+    # 邏輯：根據折數決定 Embed 左側的色條 (十進位色碼)
+    # 低於 50% 使用綠色 (5763719)，否則使用橘色 (16753920)
+    embed_color = 5763719 if ratio < 50 else 16753920
+    
+    # 將輸出格式轉換為 Discord Embed JSON 結構
     message = {
-        "content": f"🚨 **低價合約警報** 🚨\n"
-                   f"**物品:** {item_name}\n"
-                   f"**合約價:** {price:,.2f} ISK\n"
-                   f"**估計價:** {estimated_value:,.2f} ISK\n"
-                   f"**折數:** {ratio:.1f}%\n"
-                   f"🔗 [點此前往 Mutamarket 查看]({item_url})"
+        "embeds": [
+            {
+                "title": "🚨 發現低價深淵裝備",
+                "url": item_url,
+                "color": embed_color,
+                "fields": [
+                    {
+                        "name": "裝備名稱",
+                        "value": f"**{item_name}**",
+                        "inline": False
+                    },
+                    {
+                        "name": "合約價格",
+                        "value": f"{price:,.2f} ISK",
+                        "inline": True
+                    },
+                    {
+                        "name": "估計價值",
+                        "value": f"{estimated_value:,.2f} ISK",
+                        "inline": True
+                    },
+                    {
+                        "name": "折數",
+                        "value": f"**{ratio:.1f}%**",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": "Mutamarket 監控系統"
+                },
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }
+        ]
     }
+    
     try:
         requests.post(DISCORD_WEBHOOK_URL, json=message)
     except Exception as e:
@@ -90,52 +121,49 @@ def main():
 
     new_alerts_sent = False
     current_page = 1
-    last_page = 1
 
-    while current_page <= last_page:
+    while True:
         current_url = TARGET_URL if current_page == 1 else f"{TARGET_URL}/page/{current_page}"
+        print(f"正在檢查第 {current_page} 頁...")
         
         data = fetch_data(current_url)
         if not data:
-            print(f"資料獲取失敗，中斷抓取。({current_url})")
+            print("無法提取資料，結束分頁抓取。")
             break
 
         modules_node = data.get('modules', {})
         
-        # 邏輯升級：同時尋找根目錄與 meta 目錄下的分頁屬性
         if isinstance(modules_node, dict) and 'data' in modules_node:
             item_list = modules_node['data']
-            fetched_last_page = modules_node.get('last_page')
-            if not fetched_last_page and 'meta' in modules_node:
-                fetched_last_page = modules_node['meta'].get('last_page')
-            last_page = fetched_last_page or 1
         elif isinstance(modules_node, list):
             item_list = modules_node
-            last_page = 1
         else:
-            print("無法解析資料結構，中斷抓取。")
+            print("無法解析模組列表，結束抓取。")
             break
-            
-        print(f"正在抓取資料: 第 {current_page} 頁 / 共 {last_page} 頁 ...")
 
-        for idx, item in enumerate(item_list):
-            # --- 系統診斷探針 ---
-            # 只在第一頁的第一筆資料觸發，將原始 JSON 結構印在 GitHub 日誌供後續校準
-            if current_page == 1 and idx == 0:
-                print("\n=== 【系統診斷：真實 JSON 結構前 800 字元】 ===")
-                print(json.dumps(item, indent=2, ensure_ascii=False)[:800])
-                print("================================================\n")
-            
-            # 先採用廣泛的鍵值嘗試邏輯，並確保型別轉換不會報錯
+        if not item_list or len(item_list) == 0:
+            print(f"第 {current_page} 頁無資料，判定已達最後一頁。")
+            break
+
+        for item in item_list:
             contract = item.get('contract') or {}
-            contract_id = str(item.get('contract_id') or contract.get('id'))
+            
+            # --- 精確拆分與防呆邏輯 ---
+            # 獲取合約 ID (每次上架合約皆為唯一值)
+            contract_id_val = item.get('contract_id') or contract.get('id')
+            # 獲取物品 ID (裝備本身的固有 ID)
+            item_id_val = item.get('id') or item.get('item_id')
+            
+            # 優先使用合約 ID。如果 API 異常未提供合約 ID，才退回使用物品 ID
+            unique_key = str(contract_id_val) if contract_id_val else str(item_id_val)
 
-            if not contract_id or contract_id == 'None':
+            if not unique_key or unique_key == 'None':
                 continue
                 
             raw_price = item.get('price') or contract.get('price')
             raw_estimated_value = item.get('estimated_value') or item.get('est_value')
-            item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
+            
+            item_name = item.get('type', {}).get('name') or "未知深淵裝備"
             
             if raw_price is None or raw_estimated_value is None:
                 continue
@@ -150,27 +178,23 @@ def main():
                 continue
                 
             if (price / estimated_value) < 0.8:
-                if contract_id not in notified_contracts:
-                    item_id = item.get('id') or item.get('item_id')
-                    item_url = f"https://mutamarket.com/module/{item_id}" if item_id else TARGET_URL
+                # 使用更新後的 unique_key 進行驗證
+                if unique_key not in notified_contracts:
+                    item_url = f"https://mutamarket.com/module/{item_id_val}" if item_id_val else TARGET_URL
                     
                     send_discord_alert(item_name, price, estimated_value, item_url)
-                    notified_contracts.add(contract_id)
+                    notified_contracts.add(unique_key)
                     new_alerts_sent = True
-                    print(f"已發送警報: {item_name} ({price / estimated_value:.1%})")
+                    print(f"觸發警報: {item_name} ({price / estimated_value:.1%})")
 
         current_page += 1
-        if current_page <= last_page:
-            time.sleep(2) # 延遲保護，防止翻頁過快被封鎖
+        time.sleep(2) 
 
     if new_alerts_sent:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
     else:
         print("本次執行沒有發現符合條件的新合約。")
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
