@@ -7,7 +7,32 @@ import time
 import datetime
 
 # --- 設定區塊 ---
-TARGET_URL = "https://mutamarket.com/modules/type/abyssal-warp-scrambler/no-multi-item-contracts/contracts-only"
+# 邏輯變更：將單一網址改為裝備清單陣列
+MODULE_TYPES = [
+    "abyssal-warp-scrambler",
+    "abyssal-stasis-webifier",
+    "abyssal-warp-disruptor",
+    "abyssal-magnetic-field-stabilizer",
+    "abyssal-heat-sink",
+    "abyssal-gyrostabilizer",
+    "abyssal-entropic-radiation-sink",
+    "abyssal-ballistic-control-system",
+    "medium-abyssal-shield-booster",
+    "large-abyssal-shield-booster",
+    "x-large-abyssal-shield-booster",
+    "small-abyssal-armor-repairer",
+    "medium-abyssal-armor-repairer",
+    "large-abyssal-armor-repairer",
+    "10mn-abyssal-afterburner",
+    "100mn-abyssal-afterburner",
+    "50mn-abyssal-microwarpdrive",
+    "small-abyssal-energy-neutralizer",
+    "medium-abyssal-energy-neutralizer",
+    "small-abyssal-energy-nosferatu",
+    "medium-abyssal-energy-nosferatu",
+    "large-abyssal-cap-battery"
+]
+
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 HEADERS = {
@@ -70,33 +95,33 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     message = {
         "embeds": [
             {
-                "title": "🚨 發現低價深淵裝備",
+                "title": "🚨 Discounted Abyssal Module Alert",
                 "url": item_url,
                 "color": embed_color,
                 "fields": [
                     {
-                        "name": "裝備名稱",
+                        "name": "Module",
                         "value": f"**{item_name}**",
                         "inline": False
                     },
                     {
-                        "name": "合約價格",
+                        "name": "Contract Price",
                         "value": f"{price:,.2f} ISK",
                         "inline": True
                     },
                     {
-                        "name": "估計價值",
+                        "name": "Estimated Value",
                         "value": f"{estimated_value:,.2f} ISK",
                         "inline": True
                     },
                     {
-                        "name": "折數",
+                        "name": "Ratio",
                         "value": f"**{ratio:.1f}%**",
                         "inline": True
                     }
                 ],
                 "footer": {
-                    "text": "Mutamarket 監控系統"
+                    "text": "Mutamarket Monitor"
                 },
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
             }
@@ -117,78 +142,88 @@ def main():
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
 
     new_alerts_sent = False
-    current_page = 1
 
-    while True:
-        current_url = TARGET_URL if current_page == 1 else f"{TARGET_URL}/page/{current_page}"
-        print(f"正在檢查第 {current_page} 頁...")
+    # 邏輯擴充：外層迴圈，負責切換不同裝備種類
+    for module_type in MODULE_TYPES:
+        print(f"\n[系統] 開始檢查裝備種類: {module_type}")
+        base_url = f"https://mutamarket.com/modules/type/{module_type}/no-multi-item-contracts/contracts-only"
         
-        data = fetch_data(current_url)
-        if not data:
-            print("無法提取資料，結束分頁抓取。")
-            break
+        current_page = 1
 
-        modules_node = data.get('modules', {})
-        
-        if isinstance(modules_node, dict) and 'data' in modules_node:
-            item_list = modules_node['data']
-        elif isinstance(modules_node, list):
-            item_list = modules_node
-        else:
-            print("無法解析模組列表，結束抓取。")
-            break
+        # 內層迴圈：負責處理當前裝備的翻頁
+        while True:
+            current_url = base_url if current_page == 1 else f"{base_url}/page/{current_page}"
+            print(f"  -> 正在獲取第 {current_page} 頁資料...")
+            
+            data = fetch_data(current_url)
+            if not data:
+                print("  -> 無法提取資料，結束此裝備種類抓取。")
+                break
 
-        if not item_list or len(item_list) == 0:
-            print(f"第 {current_page} 頁無資料，判定已達最後一頁。")
-            break
+            modules_node = data.get('modules', {})
+            
+            if isinstance(modules_node, dict) and 'data' in modules_node:
+                item_list = modules_node['data']
+            elif isinstance(modules_node, list):
+                item_list = modules_node
+            else:
+                print("  -> 無法解析模組列表，結束此裝備種類抓取。")
+                break
 
-        for item in item_list:
-            contract = item.get('contract') or {}
-            
-            contract_id_val = item.get('contract_id') or contract.get('id')
-            item_id_val = item.get('id') or item.get('item_id')
-            
-            unique_key = str(contract_id_val) if contract_id_val else str(item_id_val)
+            if not item_list or len(item_list) == 0:
+                print(f"  -> 第 {current_page} 頁無資料，此種類檢查完畢。")
+                break
 
-            if not unique_key or unique_key == 'None':
-                continue
+            for item in item_list:
+                contract = item.get('contract') or {}
                 
-            raw_price = item.get('price') or contract.get('price')
-            raw_estimated_value = item.get('estimated_value') or item.get('est_value')
-            
-            item_name = item.get('type', {}).get('name') or "未知深淵裝備"
-            
-            if raw_price is None or raw_estimated_value is None:
-                continue
+                contract_id_val = item.get('contract_id') or contract.get('id')
+                item_id_val = item.get('id') or item.get('item_id')
                 
-            try:
-                price = float(raw_price)
-                estimated_value = float(raw_estimated_value)
-            except (ValueError, TypeError):
-                continue
-                
-            if estimated_value <= 0 or price < 80000000:
-                continue
-                
-            if (price / estimated_value) < 0.8:
-                if unique_key not in notified_contracts:
+                unique_key = str(contract_id_val) if contract_id_val else str(item_id_val)
+
+                if not unique_key or unique_key == 'None':
+                    continue
                     
-                    # --- 邏輯修正：URL Slugification ---
-                    if item_id_val:
-                        # 將名稱轉換為小寫並替換空白鍵
-                        slug = item_name.lower().replace(" ", "-")
-                        item_url = f"https://mutamarket.com/modules/{slug}-{item_id_val}"
-                    else:
-                        item_url = TARGET_URL
+                raw_price = item.get('price') or contract.get('price')
+                raw_estimated_value = item.get('estimated_value') or item.get('est_value')
+                
+                item_name = item.get('type', {}).get('name') or "Unknown Abyssal Module"
+                
+                if raw_price is None or raw_estimated_value is None:
+                    continue
                     
-                    send_discord_alert(item_name, price, estimated_value, item_url)
-                    notified_contracts.add(unique_key)
-                    new_alerts_sent = True
-                    print(f"觸發警報: {item_name} ({price / estimated_value:.1%})")
+                try:
+                    price = float(raw_price)
+                    estimated_value = float(raw_estimated_value)
+                except (ValueError, TypeError):
+                    continue
+                    
+                if estimated_value <= 0 or price < 80000000:
+                    continue
+                    
+                if (price / estimated_value) < 0.8:
+                    if unique_key not in notified_contracts:
+                        
+                        if item_id_val:
+                            slug = item_name.lower().replace(" ", "-")
+                            item_url = f"https://mutamarket.com/modules/{slug}-{item_id_val}"
+                        else:
+                            item_url = base_url
+                        
+                        send_discord_alert(item_name, price, estimated_value, item_url)
+                        notified_contracts.add(unique_key)
+                        new_alerts_sent = True
+                        print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
 
-        current_page += 1
-        time.sleep(2) 
+            current_page += 1
+            # 必須的節流防護：每次翻頁強制休眠 2 秒
+            time.sleep(2) 
+            
+        # 換下一個裝備種類前，額外休眠 1 秒，減少連續高頻請求觸發防火牆的風險
+        time.sleep(1)
 
+    print("\n[系統] 所有裝備種類檢查完畢。")
     if new_alerts_sent:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
