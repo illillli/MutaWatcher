@@ -5,7 +5,7 @@ on:
   schedule:
     # 邏輯設定：每 10 分鐘執行一次。
     # 說明：GitHub Actions 的 cron 不保證秒級精準，若設 5 分鐘可能導致兩次任務重疊衝突。
-    - cron: '*/10 * * * *'
+    - cron: '0 */3 * * *'
   workflow_dispatch: # 允許在 GitHub 網頁上手動點擊執行測試
 
 # 賦予寫入權限，讓腳本可以將 notified.txt 存回儲存庫
