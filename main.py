@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import json
 import os
 import sys
+import time  # 新增：用於翻頁時的延遲保護
 
 # --- 設定區塊 ---
 TARGET_URL = "https://mutamarket.com/modules/type/abyssal-warp-scrambler/no-multi-item-contracts/contracts-only"
@@ -13,29 +14,27 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# 狀態管理檔案
 STATE_FILE = "notified.txt"
 
 def load_notified_contracts():
-    """從實體檔案讀取已通知的 ID"""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return set(line.strip() for line in f if line.strip())
     return set()
 
 def save_notified_contracts(contracts):
-    """將 ID 寫回實體檔案，供下一次 GitHub Actions 讀取"""
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         for c_id in contracts:
             f.write(f"{c_id}\n")
 
-def fetch_data():
+# 邏輯修改 1：函數現在接收 request_url 參數，不再寫死為 TARGET_URL
+def fetch_data(request_url):
     """負責繞過防護並提取 Inertia JSON 數據"""
     try:
-        response = requests.get(TARGET_URL, headers=HEADERS, timeout=15)
+        response = requests.get(request_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"網路請求失敗: {e}")
+        print(f"網路請求失敗 ({request_url}): {e}")
         return None
 
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -67,7 +66,6 @@ def fetch_data():
         return None
 
 def send_discord_alert(item_name, price, estimated_value, item_url):
-    """負責組裝訊息並推送至 Discord"""
     ratio = (price / estimated_value) * 100
     message = {
         "content": f"🚨 **低價合約警報** 🚨\n"
@@ -90,49 +88,74 @@ def main():
     notified_contracts = load_notified_contracts()
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
 
-    data = fetch_data()
-    if not data:
-        sys.exit(1)
-
-    modules_node = data.get('modules', [])
-    if isinstance(modules_node, dict) and 'data' in modules_node:
-        item_list = modules_node['data']
-    elif isinstance(modules_node, list):
-        item_list = modules_node
-    else:
-        print("無法解析資料結構。")
-        sys.exit(1)
-
     new_alerts_sent = False
+    
+    # 邏輯修改 2：分頁狀態變數初始化
+    current_page = 1
+    last_page = 1  # 預設至少執行一頁，後續會由 JSON 動態覆寫
 
-    for item in item_list:
-        contract_id = str(item.get('contract_id'))
-        if not contract_id or contract_id == 'None':
-            continue
+    # 邏輯修改 3：啟動爬行迴圈
+    while current_page <= last_page:
+        # 根據頁碼組裝正確的網址
+        if current_page == 1:
+            current_url = TARGET_URL
+        else:
+            current_url = f"{TARGET_URL}/page/{current_page}"
             
-        price = item.get('price')
-        estimated_value = item.get('estimated_value')
-        item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
+        print(f"正在抓取資料: 第 {current_page} 頁 / 共 {last_page} 頁 ...")
         
-        if not price or not estimated_value or estimated_value <= 0:
-            continue
-            
-        # 邏輯：過濾絕對價格過低的合約，忽略 80,000,000 ISK 以下的物品
-        if price < 80000000:
-            continue
-            
-        # 邏輯：合約價格低於估計價值的 8 折 (0.8) 才發出通知
-        if (price / estimated_value) < 0.8:
-            if contract_id not in notified_contracts:
-                item_id = item.get('id') or item.get('item_id')
-                item_url = f"https://mutamarket.com/module/{item_id}" if item_id else TARGET_URL
-                
-                send_discord_alert(item_name, price, estimated_value, item_url)
-                notified_contracts.add(contract_id)
-                new_alerts_sent = True
-                print(f"已發送警報: {item_name} ({price / estimated_value:.1%})")
+        data = fetch_data(current_url)
+        if not data:
+            print("資料獲取失敗，中斷後續分頁抓取。")
+            break
 
-    # 只有在發送了新警報時，才更新檔案（減少無意義的檔案寫入）
+        modules_node = data.get('modules', {})
+        
+        # 解析該頁的合約陣列與最大頁數
+        if isinstance(modules_node, dict) and 'data' in modules_node:
+            item_list = modules_node['data']
+            # 動態從伺服器回傳的數據更新總頁數
+            last_page = modules_node.get('last_page', 1)
+        elif isinstance(modules_node, list):
+            item_list = modules_node
+            last_page = 1 # 如果沒有分頁元數據，就只抓一頁
+        else:
+            print("無法解析資料結構。")
+            break
+
+        # 處理當前頁面的所有合約
+        for item in item_list:
+            contract_id = str(item.get('contract_id'))
+            if not contract_id or contract_id == 'None':
+                continue
+                
+            price = item.get('price')
+            estimated_value = item.get('estimated_value')
+            item_name = item.get('type_name') or f"Type ID: {item.get('type_id', 'Unknown')}"
+            
+            if not price or not estimated_value or estimated_value <= 0:
+                continue
+                
+            if price < 80000000:
+                continue
+                
+            if (price / estimated_value) < 0.8:
+                if contract_id not in notified_contracts:
+                    item_id = item.get('id') or item.get('item_id')
+                    item_url = f"https://mutamarket.com/module/{item_id}" if item_id else TARGET_URL
+                    
+                    send_discord_alert(item_name, price, estimated_value, item_url)
+                    notified_contracts.add(contract_id)
+                    new_alerts_sent = True
+                    print(f"已發送警報: {item_name} ({price / estimated_value:.1%})")
+
+        # 當前頁面處理完畢，準備進入下一頁
+        current_page += 1
+        
+        # 節流防護：如果還有下一頁，強制休眠 2 秒，避免被防火牆判定為 DDoS 攻擊
+        if current_page <= last_page:
+            time.sleep(2)
+
     if new_alerts_sent:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
