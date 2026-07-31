@@ -7,7 +7,6 @@ import time
 import datetime
 
 # --- 設定區塊 ---
-# 邏輯變更：將單一網址改為裝備清單陣列
 MODULE_TYPES = [
     "abyssal-warp-scrambler",
     "abyssal-stasis-webifier",
@@ -92,6 +91,10 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     
     embed_color = 5763719 if ratio < 50 else 16753920
     
+    # 邏輯修改：將價格除以一百萬，並四捨五入轉為整數
+    price_mil = int(round(price / 1000000))
+    estimated_value_mil = int(round(estimated_value / 1000000))
+    
     message = {
         "embeds": [
             {
@@ -106,12 +109,14 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
                     },
                     {
                         "name": "Contract Price",
-                        "value": f"{price:,.2f} ISK",
+                        # 顯示格式修改：加入千分位並加上 mil 字尾
+                        "value": f"{price_mil:,} mil",
                         "inline": True
                     },
                     {
                         "name": "Estimated Value",
-                        "value": f"{estimated_value:,.2f} ISK",
+                        # 顯示格式修改：加入千分位並加上 mil 字尾
+                        "value": f"{estimated_value_mil:,} mil",
                         "inline": True
                     },
                     {
@@ -143,14 +148,12 @@ def main():
 
     new_alerts_sent = False
 
-    # 邏輯擴充：外層迴圈，負責切換不同裝備種類
     for module_type in MODULE_TYPES:
         print(f"\n[系統] 開始檢查裝備種類: {module_type}")
         base_url = f"https://mutamarket.com/modules/type/{module_type}/no-multi-item-contracts/contracts-only"
         
         current_page = 1
 
-        # 內層迴圈：負責處理當前裝備的翻頁
         while True:
             current_url = base_url if current_page == 1 else f"{base_url}/page/{current_page}"
             print(f"  -> 正在獲取第 {current_page} 頁資料...")
@@ -198,11 +201,14 @@ def main():
                     estimated_value = float(raw_estimated_value)
                 except (ValueError, TypeError):
                     continue
-                    
-                if estimated_value <= 0 or price < 80000000:
+                
+                if estimated_value > 10000000000 or estimated_value < 150000000:
                     continue
                     
-                if (price / estimated_value) < 0.8:
+                if price < 80000000:
+                    continue
+                
+                if (price / estimated_value) < 0.75:
                     if unique_key not in notified_contracts:
                         
                         if item_id_val:
@@ -217,10 +223,8 @@ def main():
                         print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
 
             current_page += 1
-            # 必須的節流防護：每次翻頁強制休眠 2 秒
             time.sleep(2) 
             
-        # 換下一個裝備種類前，額外休眠 1 秒，減少連續高頻請求觸發防火牆的風險
         time.sleep(1)
 
     print("\n[系統] 所有裝備種類檢查完畢。")
