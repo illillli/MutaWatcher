@@ -98,15 +98,12 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     message = {
         "embeds": [
             {
-                "title": "🚨 Discounted Abyssal Module Alert",
+                # 邏輯修改：將標題改為物品名稱，並由下方的 url 屬性賦予超連結能力
+                "title": f"🚨 {item_name}",
                 "url": item_url,
                 "color": embed_color,
                 "fields": [
-                    {
-                        "name": "Module",
-                        "value": f"**{item_name}**",
-                        "inline": False
-                    },
+                    # 邏輯修改：移除原本顯示 Module 名稱的欄位
                     {
                         "name": "Contract Price",
                         "value": f"{price_mil:,} mil",
@@ -136,9 +133,7 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     except Exception as e:
         print(f"Discord 推送失敗: {e}")
 
-# 邏輯新增：系統執行結算報告
 def send_discord_summary(start_time, end_time, updated_count):
-    # 將時間格式化為 YYYY-MM-DD HH:MM:SS
     time_format = "%Y-%m-%d %H:%M:%S"
     start_str = start_time.strftime(time_format)
     end_str = end_time.strftime(time_format)
@@ -147,7 +142,7 @@ def send_discord_summary(start_time, end_time, updated_count):
         "embeds": [
             {
                 "title": "✅ 監控掃描完成 (System Scan Complete)",
-                "color": 8026746, # 灰色，代表系統提示
+                "color": 8026746, 
                 "fields": [
                     {
                         "name": "開始時間 (UTC+8)",
@@ -181,14 +176,12 @@ def main():
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
 
-    # 邏輯新增：定義 UTC+8 時區並記錄開始時間
     tz_utc_8 = datetime.timezone(datetime.timedelta(hours=8))
     run_start_time = datetime.datetime.now(tz_utc_8)
 
     notified_contracts = load_notified_contracts()
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
 
-    # 邏輯新增：初始化計數器
     new_alerts_count = 0
 
     for module_type in MODULE_TYPES:
@@ -262,8 +255,6 @@ def main():
                         
                         send_discord_alert(item_name, price, estimated_value, item_url)
                         notified_contracts.add(unique_key)
-                        
-                        # 邏輯修改：成功推播後，計數器 +1
                         new_alerts_count += 1
                         print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
 
@@ -274,11 +265,9 @@ def main():
 
     print("\n[系統] 所有裝備種類檢查完畢。")
     
-    # 邏輯新增：記錄結束時間並發送結算報告
     run_end_time = datetime.datetime.now(tz_utc_8)
     send_discord_summary(run_start_time, run_end_time, new_alerts_count)
 
-    # 將布林值判斷改為計數器判斷，大於 0 代表有新警報
     if new_alerts_count > 0:
         save_notified_contracts(notified_contracts)
         print("已更新狀態檔案。")
