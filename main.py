@@ -41,8 +41,6 @@ HEADERS = {
 
 STATE_FILE = "notified.txt"
 
-# --- 核心函數區塊 ---
-
 def load_notified_contracts():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -98,12 +96,10 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     message = {
         "embeds": [
             {
-                # 邏輯修改：將標題改為物品名稱，並由下方的 url 屬性賦予超連結能力
                 "title": f"🚨 {item_name}",
                 "url": item_url,
                 "color": embed_color,
                 "fields": [
-                    # 邏輯修改：移除原本顯示 Module 名稱的欄位
                     {
                         "name": "Contract Price",
                         "value": f"{price_mil:,} mil",
@@ -141,27 +137,24 @@ def send_discord_summary(start_time, end_time, updated_count):
     message = {
         "embeds": [
             {
-                "title": "✅ 監控掃描完成 (System Scan Complete)",
+                # 邏輯修改：動態標題，直接顯示新增數量
+                "title": f"✅ Scan complete: {updated_count} added.",
                 "color": 8026746, 
                 "fields": [
+                    # 邏輯修改：全面英文化並移除冗餘字樣與多餘的欄位
                     {
-                        "name": "開始時間 (UTC+8)",
+                        "name": "Start Time",
                         "value": f"`{start_str}`",
                         "inline": True
                     },
                     {
-                        "name": "結束時間 (UTC+8)",
+                        "name": "End Time",
                         "value": f"`{end_str}`",
                         "inline": True
-                    },
-                    {
-                        "name": "本次新增警報數",
-                        "value": f"**{updated_count}**",
-                        "inline": False
                     }
                 ],
                 "footer": {
-                    "text": "Mutamarket Monitor - Lifecycle Log"
+                    "text": "Mutamarket Monitor"
                 }
             }
         ]
