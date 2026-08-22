@@ -88,7 +88,14 @@ def fetch_data(request_url):
 
 def send_discord_alert(item_name, price, estimated_value, item_url):
     ratio = (price / estimated_value) * 100
-    embed_color = 5763719 if ratio < 50 else 16753920
+    
+    # 邏輯修改：三階段顏色分級
+    if ratio < 60:
+        embed_color = 5763719  # 綠色 (6折以下)
+    elif ratio < 70:
+        embed_color = 16705372 # 黃色 (7-6折)
+    else:
+        embed_color = 15548997 # 紅色 (8-7折)
     
     price_mil = int(round(price / 1000000))
     estimated_value_mil = int(round(estimated_value / 1000000))
@@ -129,48 +136,10 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     except Exception as e:
         print(f"Discord 推送失敗: {e}")
 
-def send_discord_summary(start_time, end_time, updated_count):
-    time_format = "%Y-%m-%d %H:%M:%S"
-    start_str = start_time.strftime(time_format)
-    end_str = end_time.strftime(time_format)
-    
-    message = {
-        "embeds": [
-            {
-                # 邏輯修改：動態標題，直接顯示新增數量
-                "title": f"✅ Scan complete: {updated_count} added.",
-                "color": 8026746, 
-                "fields": [
-                    # 邏輯修改：全面英文化並移除冗餘字樣與多餘的欄位
-                    {
-                        "name": "Start Time",
-                        "value": f"`{start_str}`",
-                        "inline": True
-                    },
-                    {
-                        "name": "End Time",
-                        "value": f"`{end_str}`",
-                        "inline": True
-                    }
-                ],
-                "footer": {
-                    "text": "Mutamarket Monitor"
-                }
-            }
-        ]
-    }
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json=message)
-    except Exception as e:
-        print(f"Discord 結算推播失敗: {e}")
-
 def main():
     if not DISCORD_WEBHOOK_URL:
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
-
-    tz_utc_8 = datetime.timezone(datetime.timedelta(hours=8))
-    run_start_time = datetime.datetime.now(tz_utc_8)
 
     notified_contracts = load_notified_contracts()
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
@@ -182,6 +151,7 @@ def main():
         base_url = f"https://mutamarket.com/modules/type/{module_type}/no-multi-item-contracts/contracts-only"
         
         current_page = 1
+        MAX_PAGES = 3
 
         while True:
             current_url = base_url if current_page == 1 else f"{base_url}/page/{current_page}"
@@ -237,7 +207,8 @@ def main():
                 if price < 80000000:
                     continue
                 
-                if (price / estimated_value) < 0.75:
+                # 邏輯修正：放寬門檻至 0.8 (8折)，以匹配紅色的觸發區間
+                if (price / estimated_value) < 0.8:
                     if unique_key not in notified_contracts:
                         
                         if item_id_val:
@@ -251,15 +222,16 @@ def main():
                         new_alerts_count += 1
                         print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
 
+            if current_page >= MAX_PAGES:
+                print(f"  -> 已達到最大掃描深度 ({MAX_PAGES} 頁)，切換下一種裝備。")
+                break
+
             current_page += 1
             time.sleep(2) 
             
         time.sleep(1)
 
     print("\n[系統] 所有裝備種類檢查完畢。")
-    
-    run_end_time = datetime.datetime.now(tz_utc_8)
-    send_discord_summary(run_start_time, run_end_time, new_alerts_count)
 
     if new_alerts_count > 0:
         save_notified_contracts(notified_contracts)
