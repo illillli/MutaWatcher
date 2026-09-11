@@ -34,9 +34,11 @@ MODULE_TYPES = [
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
+# 邏輯升級：加入 X-Inertia 標頭，嘗試強制伺服器回傳純 JSON API
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "application/json, text/html, application/xhtml+xml",
+    "X-Inertia": "true"
 }
 
 STATE_FILE = "notified.txt"
@@ -57,45 +59,65 @@ def fetch_data(request_url):
         response = requests.get(request_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"網路請求失敗 ({request_url}): {e}")
+        print(f"  -> 網路請求失敗 ({request_url}): {e}")
         return None
 
-    soup = BeautifulSoup(response.text, 'html.parser')
-    raw_json_string = None
+    # 策略 1: 直接解析 JSON (Inertia API 模式)
+    try:
+        json_data = response.json()
+        return json_data.get('props', json_data)
+    except ValueError:
+        pass 
 
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # 策略 2: 全覆蓋式 HTML 節點掃描
     script_nodes = soup.find_all('script', type="application/json")
     for script in script_nodes:
         if script.text and '"props":' in script.text:
-            raw_json_string = script.text
-            break
-        elif script.has_attr('data-page') and len(script['data-page']) > 10:
-            raw_json_string = script['data-page']
-            break
+            try:
+                return json.loads(script.text.strip()).get('props', {})
+            except:
+                pass
+        if script.has_attr('data-page'):
+            try:
+                return json.loads(script['data-page']).get('props', {})
+            except:
+                pass
 
-    if not raw_json_string:
-        div_nodes = soup.find_all(lambda tag: tag.has_attr('data-page') and len(tag['data-page']) > 50)
-        if div_nodes:
-            raw_json_string = div_nodes[0]['data-page']
+    next_data = soup.find('script', id="__NEXT_DATA__")
+    if next_data:
+        try:
+            return json.loads(next_data.text).get('props', {}).get('pageProps', {})
+        except:
+            pass
 
-    if not raw_json_string:
-        return None
+    div_nodes = soup.find_all('div', attrs={'data-page': True})
+    for div in div_nodes:
+        if len(div['data-page']) > 50:
+            try:
+                return json.loads(div['data-page']).get('props', {})
+            except:
+                pass
+
+    # 策略 3: Cloudflare 診斷探針
+    page_title = soup.title.string.strip() if soup.title else "無標題"
+    print(f"  -> [系統診斷] 提取失敗。當前網頁標題: {page_title}")
     
-    try:
-        page_data = json.loads(raw_json_string.strip())
-        return page_data.get('props', {})
-    except json.JSONDecodeError:
-        return None
+    if "Just a moment" in page_title or "Cloudflare" in response.text:
+        print("  -> [致命錯誤] GitHub Actions IP 已被 Cloudflare 防火牆判定為機器人並強制攔截。")
+        
+    return None
 
 def send_discord_alert(item_name, price, estimated_value, item_url):
     ratio = (price / estimated_value) * 100
     
-    # 邏輯修改：三階段顏色分級
     if ratio < 60:
-        embed_color = 5763719  # 綠色 (6折以下)
+        embed_color = 5763719
     elif ratio < 70:
-        embed_color = 16705372 # 黃色 (7-6折)
+        embed_color = 16705372
     else:
-        embed_color = 15548997 # 紅色 (8-7折)
+        embed_color = 15548997
     
     price_mil = int(round(price / 1000000))
     estimated_value_mil = int(round(estimated_value / 1000000))
@@ -159,7 +181,6 @@ def main():
             
             data = fetch_data(current_url)
             if not data:
-                print("  -> 無法提取資料，結束此裝備種類抓取。")
                 break
 
             modules_node = data.get('modules', {})
@@ -207,7 +228,6 @@ def main():
                 if price < 80000000:
                     continue
                 
-                # 邏輯修正：放寬門檻至 0.8 (8折)，以匹配紅色的觸發區間
                 if (price / estimated_value) < 0.8:
                     if unique_key not in notified_contracts:
                         
