@@ -122,10 +122,8 @@ def send_discord_alert(item_name, price, estimated_value, item_url):
     
     if ratio < 60:
         embed_color = 5763719  # 綠色 (6折以下)
-    elif ratio < 70:
-        embed_color = 16705372 # 黃色 (7-6折)
     else:
-        embed_color = 15548997 # 紅色 (8-7折)
+        embed_color = 16705372 # 黃色 (7-6折)
     
     price_mil = int(round(price / 1000000))
     estimated_value_mil = int(round(estimated_value / 1000000))
@@ -212,7 +210,7 @@ def main():
                 if price < 80000000:
                     continue
                 
-                if (price / estimated_value) < 0.8:
+                if (price / estimated_value) < 0.7:
                     if unique_key not in notified_contracts:
                         
                         if item_id_val:
