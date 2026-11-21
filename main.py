@@ -127,12 +127,12 @@ def fmt_isk(value):
 
 
 def deal_tier(ratio):
-    """依 價格/估值 比例決定等級、顏色。"""
+    """依 價格/估值 比例決定等級圖示、顏色。"""
     if ratio < 50:
-        return "🔥 超值撿漏", 0x00E676
+        return "🔥", 0x00E676
     if ratio < 60:
-        return "✨ 非常划算", 0x2ECC71
-    return "👍 值得一看", 0xF1C40F
+        return "✨", 0x2ECC71
+    return "👍", 0xF1C40F
 
 
 def price_bar(ratio, blocks=10):
@@ -150,10 +150,9 @@ def build_alert_embed(item, item_url, module_type, preview=False):
     category = module_type.replace("-", " ").title()
 
     description = "\n".join([
-        f"## {tier}",
-        f"只要估值的 **{ratio:.1f}%**（約 **{ratio / 10:.1f} 折**）",
+        f"## {tier} {ratio:.1f}%",
         price_bar(ratio),
-        "-# 🟩 合約價　⬜ 省下的部分",
+        "-# 🟩 Price　⬜ Savings　(vs. estimated value)",
     ])
     embed = {
         "author": {"name": f"Mutamarket · {category}", "url": f"https://mutamarket.com/modules/type/{module_type}"},
@@ -162,11 +161,11 @@ def build_alert_embed(item, item_url, module_type, preview=False):
         "description": description,
         "color": color,
         "fields": [
-            {"name": "💵 合約價", "value": f"**{fmt_isk(price)}** ISK", "inline": True},
-            {"name": "📈 估值", "value": f"{fmt_isk(estimated_value)} ISK", "inline": True},
-            {"name": "🪙 省下", "value": f"**{fmt_isk(saved)}** ISK", "inline": True},
+            {"name": "💵 Price", "value": f"**{fmt_isk(price)}** ISK", "inline": True},
+            {"name": "📈 Estimated", "value": f"{fmt_isk(estimated_value)} ISK", "inline": True},
+            {"name": "🪙 Savings", "value": f"**{fmt_isk(saved)}** ISK", "inline": True},
         ],
-        "footer": {"text": "Mutamarket 監控" + ("（預覽，不是新合約）" if preview else "")},
+        "footer": {"text": "Mutamarket Monitor" + (" · Preview (not a new contract)" if preview else "")},
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     if item.get('type_id'):
