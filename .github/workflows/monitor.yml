@@ -7,6 +7,11 @@ on:
     # 說明：GitHub Actions 的 cron 不保證秒級精準，若設 5 分鐘可能導致兩次任務重疊衝突。
     - cron: '0 */1 * * *'
   workflow_dispatch: # 允許在 GitHub 網頁上手動點擊執行測試
+    inputs:
+      preview:
+        description: "只發一則預覽看樣式（不會記錄成已通知）"
+        type: boolean
+        default: false
 
 # 賦予寫入權限，讓腳本可以將 notified.txt 存回儲存庫
 permissions:
@@ -32,6 +37,7 @@ jobs:
         # 將 GitHub Secrets 注入為環境變數供 Python 讀取
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PREVIEW: ${{ inputs.preview && '1' || '' }}
         run: python main.py
         
       - name: 提交並推送更新後的狀態檔案

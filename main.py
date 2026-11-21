@@ -74,7 +74,7 @@ def fetch_raw_html(request_url):
 def parse_items_from_html(raw_html):
     items = []
     # 利用 Regex 捕捉物品 ID (Group 1) 與物品名稱 (Group 2) 作為每個裝備區塊的開頭
-    pattern = r'\{id:\s*(\d+),\s*type:\s*\{id:\s*\d+,\s*name:\s*"([^"]+)"\}'
+    pattern = r'\{id:\s*(\d+),\s*type:\s*\{id:\s*(\d+),\s*name:\s*"([^"]+)"\}'
     matches = list(re.finditer(pattern, raw_html))
     
     for i in range(len(matches)):
@@ -84,7 +84,8 @@ def parse_items_from_html(raw_html):
         chunk = raw_html[start:end]
         
         item_id = matches[i].group(1)
-        item_name = matches[i].group(2)
+        type_id = matches[i].group(2)
+        item_name = matches[i].group(3)
         
         # 提取估算價值 (容錯處理，找不到就跳過此裝備)
         est_match = re.search(r'\bestimated_value:\s*([\d\.]+)', chunk)
@@ -111,63 +112,113 @@ def parse_items_from_html(raw_html):
         items.append({
             'item_id': item_id,
             'item_name': item_name,
+            'type_id': type_id,
             'price': price,
             'estimated_value': estimated_value,
             'contract_id': contract_id
         })
     return items
 
-def send_discord_alert(item_name, price, estimated_value, item_url):
-    ratio = (price / estimated_value) * 100
-    
+def fmt_isk(value):
+    """把 ISK 寫成 1.23 B / 456 M 這種好讀的格式。"""
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f} B"
+    return f"{value / 1_000_000:,.0f} M"
+
+
+def deal_tier(ratio):
+    """依 價格/估值 比例決定等級、顏色。"""
+    if ratio < 50:
+        return "🔥 超值撿漏", 0x00E676
     if ratio < 60:
-        embed_color = 5763719  # 綠色 (6折以下)
-    else:
-        embed_color = 16705372 # 黃色 (7-6折)
-    
-    price_mil = int(round(price / 1000000))
-    estimated_value_mil = int(round(estimated_value / 1000000))
-    
-    message = {
-        "embeds": [
-            {
-                "title": f"🚨 {item_name}",
-                "url": item_url,
-                "color": embed_color,
-                "fields": [
-                    {
-                        "name": "Contract Price",
-                        "value": f"{price_mil:,} mil",
-                        "inline": True
-                    },
-                    {
-                        "name": "Estimated Value",
-                        "value": f"{estimated_value_mil:,} mil",
-                        "inline": True
-                    },
-                    {
-                        "name": "Ratio",
-                        "value": f"**{ratio:.1f}%**",
-                        "inline": True
-                    }
-                ],
-                "footer": {
-                    "text": "Mutamarket Monitor"
-                },
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            }
-        ]
+        return "✨ 非常划算", 0x2ECC71
+    return "👍 值得一看", 0xF1C40F
+
+
+def price_bar(ratio, blocks=10):
+    """🟩 是你要付的、⬜ 是省下來的。"""
+    filled = max(1, min(blocks, round(ratio / 100 * blocks)))
+    return "🟩" * filled + "⬜" * (blocks - filled)
+
+
+def build_alert_embed(item, item_url, module_type, preview=False):
+    price = item['price']
+    estimated_value = item['estimated_value']
+    ratio = price / estimated_value * 100
+    saved = estimated_value - price
+    tier, color = deal_tier(ratio)
+    category = module_type.replace("-", " ").title()
+
+    description = "\n".join([
+        f"## {tier}",
+        f"只要估值的 **{ratio:.1f}%**（約 **{ratio / 10:.1f} 折**）",
+        price_bar(ratio),
+        "-# 🟩 合約價　⬜ 省下的部分",
+    ])
+    embed = {
+        "author": {"name": f"Mutamarket · {category}", "url": f"https://mutamarket.com/modules/type/{module_type}"},
+        "title": item['item_name'],
+        "url": item_url,
+        "description": description,
+        "color": color,
+        "fields": [
+            {"name": "💵 合約價", "value": f"**{fmt_isk(price)}** ISK", "inline": True},
+            {"name": "📈 估值", "value": f"{fmt_isk(estimated_value)} ISK", "inline": True},
+            {"name": "🪙 省下", "value": f"**{fmt_isk(saved)}** ISK", "inline": True},
+        ],
+        "footer": {"text": "Mutamarket 監控" + ("（預覽，不是新合約）" if preview else "")},
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
-    
+    if item.get('type_id'):
+        embed["thumbnail"] = {"url": f"https://images.evetech.net/types/{item['type_id']}/icon?size=64"}
+    return embed
+
+
+def send_discord_alert(item, item_url, module_type, preview=False):
+    message = {"embeds": [build_alert_embed(item, item_url, module_type, preview)]}
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=message)
+        r = requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=15)
+        if r.status_code == 429:  # 被限速就等一下再送
+            time.sleep(float(r.json().get("retry_after", 2)) + 0.5)
+            r = requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=15)
+        r.raise_for_status()
     except Exception as e:
         print(f"Discord 推送失敗: {e}")
+
+
+def item_url_for(item, base_url):
+    if item['item_id']:
+        slug = item['item_name'].lower().replace(" ", "-")
+        return f"https://mutamarket.com/modules/{slug}-{item['item_id']}"
+    return base_url
+
+
+def passes_value_filter(item):
+    return 150_000_000 <= item['estimated_value'] <= 10_000_000_000 and item['price'] >= 80_000_000
+
+
+def send_preview():
+    """PREVIEW=1 時：挑第一種裝備第一頁裡最便宜的一筆發出去，看看樣式（不記錄、不影響正常通知）。"""
+    module_type = MODULE_TYPES[0]
+    base_url = f"https://mutamarket.com/modules/type/{module_type}/no-multi-item-contracts/contracts-only"
+    raw_html = fetch_raw_html(base_url)
+    items = [i for i in parse_items_from_html(raw_html or "") if passes_value_filter(i)]
+    if not items:
+        print("預覽：找不到可用的合約。")
+        return
+    best = min(items, key=lambda i: i['price'] / i['estimated_value'])
+    send_discord_alert(best, item_url_for(best, base_url), module_type, preview=True)
+    print(f"預覽已發送：{best['item_name']}")
+
 
 def main():
     if not DISCORD_WEBHOOK_URL:
         print("嚴重錯誤：找不到 DISCORD_WEBHOOK_URL，請檢查 GitHub Secrets 設定。")
         sys.exit(1)
+
+    if os.environ.get("PREVIEW") == "1":
+        send_preview()
+        return
 
     notified_contracts = load_notified_contracts()
     print(f"啟動時已讀取 {len(notified_contracts)} 筆歷史通知紀錄。")
@@ -202,24 +253,13 @@ def main():
                 price = item['price']
                 estimated_value = item['estimated_value']
                 item_name = item['item_name']
-                item_id_val = item['item_id']
-                
-                if estimated_value > 10000000000 or estimated_value < 150000000:
+
+                if not passes_value_filter(item):
                     continue
-                    
-                if price < 80000000:
-                    continue
-                
+
                 if (price / estimated_value) < 0.7:
                     if unique_key not in notified_contracts:
-                        
-                        if item_id_val:
-                            slug = item_name.lower().replace(" ", "-")
-                            item_url = f"https://mutamarket.com/modules/{slug}-{item_id_val}"
-                        else:
-                            item_url = base_url
-                        
-                        send_discord_alert(item_name, price, estimated_value, item_url)
+                        send_discord_alert(item, item_url_for(item, base_url), module_type)
                         notified_contracts.add(unique_key)
                         new_alerts_count += 1
                         print(f"  *** 觸發警報: {item_name} ({price / estimated_value:.1%}) ***")
