@@ -108,14 +108,19 @@ def parse_items_from_html(raw_html):
             c_match = re.search(r'\bcontract:\s*\{[^\}]*?id:\s*(\d+)', chunk)
             if c_match:
                 contract_id = c_match.group(1)
-                
+
+        # 合約類型：item_exchange（一口價）或 auction（拍賣）
+        type_match = re.search(r'\bcontract:\s*\{id:\s*\d+,\s*type:\s*"(\w+)"', chunk)
+        contract_type = type_match.group(1) if type_match else ""
+
         items.append({
             'item_id': item_id,
             'item_name': item_name,
             'type_id': type_id,
             'price': price,
             'estimated_value': estimated_value,
-            'contract_id': contract_id
+            'contract_id': contract_id,
+            'contract_type': contract_type,
         })
     return items
 
@@ -150,7 +155,7 @@ def build_alert_embed(item, item_url, module_type, preview=False):
     category = module_type.replace("-", " ").title()
 
     description = "\n".join([
-        f"## {tier} {ratio:.1f}%",
+        f"{tier} Listed at **{ratio:.1f}%** of its estimated value",
         price_bar(ratio),
         "-# 🟩 Price　⬜ Savings　(vs. estimated value)",
     ])
@@ -193,6 +198,9 @@ def item_url_for(item, base_url):
 
 
 def passes_value_filter(item):
+    # 拍賣的價格只是起標價，不準，直接跳過
+    if item.get('contract_type') == 'auction':
+        return False
     return 150_000_000 <= item['estimated_value'] <= 10_000_000_000 and item['price'] >= 80_000_000
 
 
