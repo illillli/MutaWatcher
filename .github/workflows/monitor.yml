@@ -3,6 +3,7 @@ name: Mutamarket Monitor
 # 設定觸發條件
 on:
   schedule:
+    # 主要由 cron-job.org 每小時用 workflow_dispatch 觸發，這個 GitHub 排程只是備援。
     # 邏輯設定：每 1 hr 執行一次。
     # 說明：GitHub Actions 的 cron 不保證秒級精準，若設 5 分鐘可能導致兩次任務重疊衝突。
     - cron: '0 */1 * * *'
@@ -16,6 +17,11 @@ on:
 # 賦予寫入權限，讓腳本可以將 notified.txt 存回儲存庫
 permissions:
   contents: write
+
+# cron-job.org 和 GitHub 自己的排程可能同時觸發，讓它們排隊，避免重複通知
+concurrency:
+  group: mutamarket-monitor
+  cancel-in-progress: false
 
 jobs:
   check-market:
@@ -48,7 +54,7 @@ jobs:
           # 邏輯判斷：使用 Bash 的 [ -f 檔案路徑 ] 來檢查檔案是否真實存在
           if [ -f notified.txt ]; then
             git add notified.txt
-            git diff-index --quiet HEAD || (git commit -m "chore: 更新已通知合約清單 [skip ci]" && git push)
+            git diff-index --quiet HEAD || (git commit -m "chore: 更新已通知合約清單 [skip ci]" && git pull --rebase && git push)
           else
             echo "沒有發現新合約，狀態檔案未生成，略過 Git 提交程序。"
           fi
